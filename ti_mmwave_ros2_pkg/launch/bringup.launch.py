@@ -16,7 +16,7 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
 
     cfg_file = "iwr1843boost_outdoor_hires_10m.cfg"  #"iwr1843boost_outdoor_survey_hover.cfg"
-    cfg_file = "iwr1843boost_outdoor_survey_hover.cfg"
+    cfg_file = "iwr1843_drone_slam_15m.cfg"
     #cfg_file = "iwr1843boost_outdoor_survey_25m_576k.cfg"
     #cfg_file = "iwr1843boost_config4_max_fov_no_clutter.cfg"
     #cfg_file = "iwr1843boost_outdoor_survey_25m_final.cfg"
@@ -68,13 +68,13 @@ def generate_launch_description():
             "numLoops": 128,
             "num_TX": 3,
             "f_s": 10000000.0,
-            "f_c": 77000603000.0,
-            "BW": 576000000.0,
+            "f_c": 77804000000.0,  #77000603000.0,
+            "BW": 768000000.0,  #576000000.0,
             "PRI": 0.000065,
             "t_fr": 0.06666,
-            "max_range": 33.31,
-            "range_resolution": 0.2602,
-            "max_doppler_vel": 9.983,
+            "max_range": 24.98, #33.31,
+            "range_resolution": 0.1952,  #0.2602,
+            "max_doppler_vel": 9.880,  #9.983,
             "doppler_vel_resolution": 0.07799,
         }],
     )
