@@ -43,7 +43,7 @@
 
 DataUARTHandler::DataUARTHandler()
     : rclcpp::Node("DataUARTHandler"), currentBufp(&pingPongBuffers[0]),
-      nextBufp(&pingPongBuffers[1]) {
+      nextBufp(&pingPongBuffers[1]), threadsStarted(false) {
   //   DataUARTHandler_pub = create_publisher<sensor_msgs::msg::PointCloud2>(
   //       "/ti_mmwave/radar_scan_pcl", 100);
   //   radar_scan_pub =
@@ -283,30 +283,29 @@ int DataUARTHandler::isMagicWord(uint8_t last8Bytes[8]) {
 void *DataUARTHandler::syncedBufferSwap(void) {
   while (rclcpp::ok()) {
 
-    // std::cout << "syncedBufferSwap" << std::endl;
-
     pthread_mutex_lock(&countSync_mutex);
 
+    // Wait until both read and sort threads have checked in.
+    // Re-check the condition after every wakeup to guard against spurious wakeups.
     while (countSync < COUNT_SYNC_MAX) {
       pthread_cond_wait(&countSync_max_cv, &countSync_mutex);
-
-      pthread_mutex_lock(&currentBufp_mutex);
-      pthread_mutex_lock(&nextBufp_mutex);
-
-      std::vector<uint8_t> *tempBufp = currentBufp;
-
-      this->currentBufp = this->nextBufp;
-
-      this->nextBufp = tempBufp;
-
-      pthread_mutex_unlock(&currentBufp_mutex);
-      pthread_mutex_unlock(&nextBufp_mutex);
-
-      countSync = 0;
-
-      pthread_cond_signal(&sort_go_cv);
-      pthread_cond_signal(&read_go_cv);
     }
+
+    // Both threads have checked in — safe to swap.
+    pthread_mutex_lock(&currentBufp_mutex);
+    pthread_mutex_lock(&nextBufp_mutex);
+
+    std::vector<uint8_t> *tempBufp = currentBufp;
+    this->currentBufp = this->nextBufp;
+    this->nextBufp = tempBufp;
+
+    pthread_mutex_unlock(&currentBufp_mutex);
+    pthread_mutex_unlock(&nextBufp_mutex);
+
+    countSync = 0;
+
+    pthread_cond_signal(&sort_go_cv);
+    pthread_cond_signal(&read_go_cv);
 
     pthread_mutex_unlock(&countSync_mutex);
   }
@@ -506,7 +505,7 @@ void *DataUARTHandler::sortIncomingData(void) {
                  sizeof(mmwData.objOut.z));
           currentDatap += (sizeof(mmwData.objOut.z));
 
-          float temp[7];
+          float temp[8];
 
           temp[0] = (float)mmwData.objOut.x;
           temp[1] = (float)mmwData.objOut.y;
@@ -874,11 +873,6 @@ void *DataUARTHandler::sortIncomingData(void) {
 }
 
 void DataUARTHandler::start(void) {
-
-  pthread_t uartThread, sorterThread, swapThread;
-
-  int iret1, iret2, iret3;
-
   pthread_mutex_init(&countSync_mutex, NULL);
   pthread_mutex_init(&nextBufp_mutex, NULL);
   pthread_mutex_init(&currentBufp_mutex, NULL);
@@ -888,37 +882,50 @@ void DataUARTHandler::start(void) {
 
   countSync = 0;
 
-  /* Create independent threads each of which will execute function */
-  iret1 =
-      pthread_create(&uartThread, NULL, this->readIncomingData_helper, this);
-  if (iret1) {
-    printf("Error - pthread_create() return code: %d\n", iret1);
+  int ret;
+  ret = pthread_create(&uartThread, NULL, this->readIncomingData_helper, this);
+  if (ret) {
+    printf("Error - pthread_create() return code: %d\n", ret);
     rclcpp::shutdown();
+    return;
   }
 
-  iret2 =
-      pthread_create(&sorterThread, NULL, this->sortIncomingData_helper, this);
-  if (iret2) {
-    printf("Error - pthread_create() return code: %d\n", iret2);
+  ret = pthread_create(&sorterThread, NULL, this->sortIncomingData_helper, this);
+  if (ret) {
+    printf("Error - pthread_create() return code: %d\n", ret);
     rclcpp::shutdown();
+    return;
   }
 
-  iret3 =
-      pthread_create(&swapThread, NULL, this->syncedBufferSwap_helper, this);
-  if (iret3) {
-    printf("Error - pthread_create() return code: %d\n", iret3);
+  ret = pthread_create(&swapThread, NULL, this->syncedBufferSwap_helper, this);
+  if (ret) {
+    printf("Error - pthread_create() return code: %d\n", ret);
     rclcpp::shutdown();
+    return;
   }
 
-  // rclcpp::spin(shared_from_this());
-  while (1)
-    continue;
+  threadsStarted = true;
+  // Returns immediately. The component container's executor handles spinning.
+  // Threads exit when rclcpp::ok() returns false (e.g. on SIGINT).
+  // Cleanup happens in the destructor.
+}
 
-  pthread_join(iret1, NULL);
+DataUARTHandler::~DataUARTHandler() {
+  if (!threadsStarted) return;
+
+  // Wake any threads blocked on condition variables so they can observe
+  // rclcpp::ok() == false and exit their loops.
+  pthread_mutex_lock(&countSync_mutex);
+  pthread_cond_broadcast(&countSync_max_cv);
+  pthread_cond_broadcast(&sort_go_cv);
+  pthread_cond_broadcast(&read_go_cv);
+  pthread_mutex_unlock(&countSync_mutex);
+
+  pthread_join(uartThread, NULL);
   printf("DataUARTHandler Read Thread joined\n");
-  pthread_join(iret2, NULL);
+  pthread_join(sorterThread, NULL);
   printf("DataUARTHandler Sort Thread joined\n");
-  pthread_join(iret3, NULL);
+  pthread_join(swapThread, NULL);
   printf("DataUARTHandler Swap Thread joined\n");
 
   pthread_mutex_destroy(&countSync_mutex);
@@ -950,7 +957,7 @@ void DataUARTHandler::visualize(
   marker.header.stamp = rclcpp::Clock().now();
   marker.id = msg.point_id;
   marker.type = visualization_msgs::msg::Marker::SPHERE;
-  marker.lifetime = rclcpp::Duration(tfr, 0);
+  marker.lifetime = rclcpp::Duration::from_seconds(tfr);
   marker.action = marker.ADD;
 
   marker.pose.position.x = msg.x;
@@ -960,7 +967,7 @@ void DataUARTHandler::visualize(
   marker.pose.orientation.x = 0;
   marker.pose.orientation.y = 0;
   marker.pose.orientation.z = 0;
-  marker.pose.orientation.w = 0;
+  marker.pose.orientation.w = 1;
 
   marker.scale.x = .03;
   marker.scale.y = .03;

@@ -49,7 +49,7 @@
 #include <utility>
 
 #include "sensor_msgs/point_cloud2_iterator.hpp"
-#include "tf2_sensor_msgs/tf2_sensor_msgs.h"
+#include "tf2_sensor_msgs/tf2_sensor_msgs.hpp"
 #include "tf2_ros/create_timer_ros.h"
 
 namespace pointcloud_to_laserscan
@@ -64,7 +64,7 @@ PointCloudToLaserScanNode::PointCloudToLaserScanNode(const rclcpp::NodeOptions &
   // achievable by the associated executor
   input_queue_size_ = this->declare_parameter(
     "queue_size", static_cast<int>(std::thread::hardware_concurrency()));
-  min_height_ = this->declare_parameter("min_height", std::numeric_limits<double>::min());
+  min_height_ = this->declare_parameter("min_height", std::numeric_limits<double>::lowest());
   max_height_ = this->declare_parameter("max_height", std::numeric_limits<double>::max());
   angle_min_ = this->declare_parameter("angle_min", -M_PI);
   angle_max_ = this->declare_parameter("angle_max", M_PI);

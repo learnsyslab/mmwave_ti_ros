@@ -14,6 +14,7 @@
   <depend>sensor_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>pcl_ros</depend>
+  <depend>serial</depend>
   <depend>ti_mmwave_ros2_interfaces</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>

@@ -110,7 +110,7 @@ void mmWaveCommSrv::commSrv_cb(
       RCLCPP_ERROR(this->get_logger(),
                    "mmWaveCommSrv: Failed second time to open User serial "
                    "port, error: %s",
-                   e1.what());
+                   e2.what());
       RCLCPP_INFO(this->get_logger(),
                   "mmWaveCommSrv: Port could not be opened. Port is \"%s\" and "
                   "baud rate is %d",

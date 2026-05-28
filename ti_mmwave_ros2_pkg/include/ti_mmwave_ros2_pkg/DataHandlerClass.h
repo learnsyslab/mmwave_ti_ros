@@ -39,6 +39,8 @@ public:
   COMPOSITION_PUBLIC
   DataUARTHandler();
 
+  ~DataUARTHandler();
+
   COMPOSITION_PUBLIC
   void setPublishers(
       const rclcpp::Publisher<PointCloud2>::SharedPtr DataUARTHandler_pub_in,
@@ -107,6 +109,12 @@ private:
   /*Contains the max_allowed_azimuth_angle_deg (points with azimuth angles
     outside +/- max_allowed_azimuth_angle_deg will be removed)*/
   int maxAllowedAzimuthAngleDeg;
+
+  /*Thread handles — stored so the destructor can join them*/
+  pthread_t uartThread;
+  pthread_t sorterThread;
+  pthread_t swapThread;
+  bool threadsStarted;
 
   /*Mutex protected variable which synchronizes threads*/
   int countSync;

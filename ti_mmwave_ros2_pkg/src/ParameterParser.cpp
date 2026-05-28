@@ -59,9 +59,9 @@ void ParameterParser::init(const std::string &ns){
     if (!rclcpp::ok()) {
       RCLCPP_ERROR(this->get_logger(),
                    "client interrupted while waiting for service to appear.");
-      exit(0);
+      exit(1);
     }
-    RCLCPP_INFO(this->get_logger(), "wwaiting for service to appear...");
+    RCLCPP_INFO(this->get_logger(), "waiting for service to appear...");
   }
 }
 
