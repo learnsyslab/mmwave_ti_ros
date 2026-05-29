@@ -51,10 +51,10 @@ public:
 
   void setNamespace(const std::string &ns);
 
-  void setFrameID(char *myFrameID);
+  void setFrameID(const std::string &myFrameID);
 
   /*User callable function to set the UARTPort*/
-  void setUARTPort(char *mySerialPort);
+  void setUARTPort(const std::string &mySerialPort);
 
   /*User callable function to set the BaudRate*/
   void setBaudRate(int myBaudRate);
@@ -95,9 +95,9 @@ private:
   float max_vel;
   float vvel;
 
-  char *frameID;
+  std::string frameID;
   /*Contains the name of the serial port*/
-  char *dataSerialPort;
+  std::string dataSerialPort;
 
   /*Contains the baud Rate*/
   int dataBaudRate;

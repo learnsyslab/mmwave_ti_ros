@@ -119,10 +119,10 @@ void DataUARTHandler::callbackGlobalParam(
       vrange, max_vel / 2, vvel);
 }
 
-void DataUARTHandler::setFrameID(char *myFrameID) { frameID = myFrameID; }
+void DataUARTHandler::setFrameID(const std::string &myFrameID) { frameID = myFrameID; }
 
 /*Implementation of setUARTPort*/
-void DataUARTHandler::setUARTPort(char *mySerialPort) {
+void DataUARTHandler::setUARTPort(const std::string &mySerialPort) {
   dataSerialPort = mySerialPort;
 }
 
@@ -449,7 +449,7 @@ void *DataUARTHandler::sortIncomingData(void) {
       RScan->header.frame_id = frameID;
       RScan->height = 1;
       RScan->width = mmwData.numObjOut;
-      RScan->is_dense = 1;
+      RScan->is_dense = true;
       RScan->points.resize(RScan->width * RScan->height);
 
       // Calculate ratios for max desired elevation and azimuth angles
@@ -658,6 +658,7 @@ void *DataUARTHandler::sortIncomingData(void) {
       break;
 
     case READ_LOG_MAG_RANGE:
+      currentDatap += tlvLen;
       sorterState = CHECK_TLV_TYPE;
       break;
 
@@ -835,6 +836,9 @@ void *DataUARTHandler::sortIncomingData(void) {
           break;
 
         default:
+          // Unknown TLV type (e.g. tracker TLVs from SDK 3.x with guiMonitor tracker=1).
+          // Must skip the data bytes or subsequent TLV header reads will be misaligned.
+          currentDatap += tlvLen;
           break;
         }
       }

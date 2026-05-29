@@ -132,18 +132,26 @@ int main(int argc, char **argv) {
         auto result = result_future.get();
 
         if (result != nullptr) {
-          if (std::regex_search(result->resp, std::regex("Done"))) {
-            // ROS_INFO("mmWaveQuickConfig: Command successful (mmWave sensor
-            // responded with 'Done')");
+          if (std::regex_search(result->resp, std::regex("[Ee]rror"))) {
+            RCLCPP_ERROR(node->get_logger(),
+                         "mmWaveQuickConfig: Command failed: '%s'",
+                         request->comm.c_str());
+            RCLCPP_ERROR(node->get_logger(),
+                         "mmWaveQuickConfig: Response: '%s'",
+                         result->resp.c_str());
+            return 1;
+          } else {
+            // Accept responses that contain "Done" or, for commands like
+            // sensorStart on SDK 3.x that emit calibration debug info instead
+            // of "Done", any response without an explicit error.
+            if (!std::regex_search(result->resp, std::regex("Done"))) {
+              RCLCPP_WARN(node->get_logger(),
+                          "mmWaveQuickConfig: Command '%s' did not respond "
+                          "with 'Done', treating as success. Response: '%s'",
+                          request->comm.c_str(), result->resp.c_str());
+            }
             std::cout << "result->resp : " << result->resp << std::endl;
             parser->ParamsParser(result->resp);
-          } else {
-            RCLCPP_ERROR(node->get_logger(),
-                         "mmWaveQuickConfig: Command failed (mmWave sensor did "
-                         "not respond with 'Done')");
-            RCLCPP_ERROR(node->get_logger(),
-                         "mmWaveQuickConfig: Response: '%s'", result->resp);
-            return 1;
           }
         } else {
           RCLCPP_ERROR(node->get_logger(),

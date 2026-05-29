@@ -107,8 +107,8 @@ void mmWaveDataHdl::onInit() {
   DataHandler->onInit();
   DataHandler->setPublishers(DataUARTHandler_pub, radar_scan_pub, marker_pub);
 
-  DataHandler->setFrameID((char *)myFrameID.c_str());
-  DataHandler->setUARTPort((char *)mySerialPort.c_str());
+  DataHandler->setFrameID(myFrameID);
+  DataHandler->setUARTPort(mySerialPort);
   DataHandler->setBaudRate(myBaudRate);
   DataHandler->setMaxAllowedElevationAngleDeg(myMaxAllowedElevationAngleDeg);
   DataHandler->setMaxAllowedAzimuthAngleDeg(myMaxAllowedAzimuthAngleDeg);

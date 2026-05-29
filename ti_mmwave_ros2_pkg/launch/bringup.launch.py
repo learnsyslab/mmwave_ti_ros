@@ -15,7 +15,7 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
 
-    cfg_file = "6843AOP_3d.cfg"
+    cfg_file = "6843AOP_saberguide_odom.cfg"
 
     pkg_dir_path = get_package_share_directory('ti_mmwave_ros2_pkg')
     cfg_file_path = os.path.join(pkg_dir_path, 'cfg', cfg_file)
