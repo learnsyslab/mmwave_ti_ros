@@ -8,3 +8,4 @@ float32 velocity
 uint16 doppler_bin
 float32 bearing
 float32 intensity
+float32 noise

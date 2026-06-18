@@ -36,6 +36,24 @@ def generate_launch_description():
         }],
     )
 
+    # Physics parameters are derived from the cfg by ParameterParser at runtime
+    # and overwrite these values. They are set here explicitly so the node starts
+    # with correct values for this config rather than stale hardcoded defaults.
+    #
+    # Derived from iwr1843boost_outdoor_survey_hover.cfg using ParameterParser formulas:
+    #   profileCfg: startFreq=77GHz, idleTime=30µs, rampEnd=35µs,
+    #               freqSlope=45MHz/µs, numAdcSamples=128, adcSamplingFreq=10000ksps
+    #   frameCfg:   numLoops=128, framePeriodicity=66.66ms, chirpIdx 0-2 → 3 TX
+    #
+    #   fs   = 10000e3 = 10.0 MHz
+    #   adc_duration = 128 / 10e6 = 12.8 µs
+    #   BW   = 45e12 * 12.8e-6 = 576.0 MHz
+    #   PRI  = (30+35)*1e-6 = 65.0 µs  (one full TX cycle, TDM MIMO slot)
+    #   fc   = 77e9 + 45e12*(7e-6 + 6.4e-6) = 77.000603 GHz
+    #   vrange     = c/(2*BW)       = 299792458/(2*576e6) = 0.2602 m
+    #   max_range  = 128 * 0.2602   = 33.31 m  (ADC limit; CFAR caps to 25m)
+    #   max_vel    = c/(2*fc*PRI)/ntx = 299792458/(2*77.000603e9*65e-6)/3 = 9.983 m/s
+    #   vvel       = max_vel/128    = 0.07799 m/s
     mmwave_comm_srv_node = Node(
         package='ti_mmwave_ros2_pkg',
         executable='mmwave_comm_srv_node',
@@ -45,6 +63,19 @@ def generate_launch_description():
             "command_port": "/dev/iwr1843_cfg",
             "command_rate": 115200,
             "mmWaveCLI_name": "/mmWaveCLI",
+            # radar parameters
+            "numAdcSamples": 128,
+            "numLoops": 128,
+            "num_TX": 3,
+            "f_s": 10000000.0,
+            "f_c": 77000603000.0,
+            "BW": 576000000.0,
+            "PRI": 0.000065,
+            "t_fr": 0.06666,
+            "max_range": 33.31,
+            "range_resolution": 0.2602,
+            "max_doppler_vel": 9.983,
+            "doppler_vel_resolution": 0.07799,
         }],
     )
 
@@ -71,8 +102,8 @@ def generate_launch_description():
                         "data_port": "/dev/iwr1843_data",
                         "data_rate": 921600,
                         "frame_id": "ti_mmwave_0",
-                        "max_allowed_elevation_angle_deg": 90,
-                        "max_allowed_azimuth_angle_deg": 90,
+                        "max_allowed_elevation_angle_deg": 15,  # aoaFovCfg: ±15°
+                        "max_allowed_azimuth_angle_deg": 60,    # aoaFovCfg: ±60°
                     }]
                 ),
             ],

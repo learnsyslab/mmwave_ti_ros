@@ -24,19 +24,21 @@
 #include <pcl/register_point_struct.h>
 #include <pthread.h>
 
-struct PointXYZIV {
+struct PointXYZVIN {
   PCL_ADD_POINT4D;
-  float intensity;
   float velocity;
+  float intensity;
+  float noise;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 } EIGEN_ALIGN16;
 
-POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIV,
+POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZVIN,
   (float, x, x)
   (float, y, y)
   (float, z, z)
-  (float, intensity, intensity)
   (float, velocity, velocity)
+  (float, intensity, intensity)
+  (float, noise, noise)
 )
 #include <visualization_msgs/msg/marker.hpp>
 #define COUNT_SYNC_MAX 2

@@ -367,8 +367,8 @@ void *DataUARTHandler::sortIncomingData(void) {
   float maxElevationAngleRatioSquared;
   float maxAzimuthAngleRatio;
 
-  boost::shared_ptr<pcl::PointCloud<PointXYZIV>> RScan(
-      new pcl::PointCloud<PointXYZIV>);
+  boost::shared_ptr<pcl::PointCloud<PointXYZVIN>> RScan(
+      new pcl::PointCloud<PointXYZVIN>);
   sensor_msgs::msg::PointCloud2 output_pointcloud;
   ti_mmwave_ros2_interfaces::msg::RadarScan radarscan;
 
@@ -603,6 +603,7 @@ void *DataUARTHandler::sortIncomingData(void) {
                        // the same as mmWave sensor Z-axis
           RScan->points[i].intensity = temp[5];
           RScan->points[i].velocity = temp[7];
+          RScan->points[i].noise = 0.0f; // not available in SDK 2.x
 
           radarscan.header.frame_id = frameID;
           radarscan.header.stamp = rclcpp::Clock().now();
@@ -648,6 +649,7 @@ void *DataUARTHandler::sortIncomingData(void) {
               mmwData.newObjOut.z; // ROS standard coordinate system Z-axis is up which is
                       // the same as mmWave sensor Z-axis
           RScan->points[i].velocity = mmwData.newObjOut.velocity;
+          RScan->points[i].noise = 0.0f; // backfilled in READ_SIDE_INFO
 
           radarscan.header.frame_id = frameID;
           radarscan.header.stamp = rclcpp::Clock().now();
@@ -711,18 +713,16 @@ void *DataUARTHandler::sortIncomingData(void) {
                  sizeof(mmwData.sideInfo.noise));
           currentDatap += (sizeof(mmwData.sideInfo.noise));
 
-          RScan->points[i].intensity =
-              (float)mmwData.sideInfo.snr /
-              10.0; // Use snr for "intensity" field (divide by 10 since unit of
-                    // snr is 0.1dB)
+          RScan->points[i].intensity = (float)mmwData.sideInfo.snr / 10.0f;
+          RScan->points[i].noise = (float)mmwData.sideInfo.noise / 10.0f;
         }
 
-        // FIX: backfill the now-known SNR-based intensity into the buffered
-        // RadarScan messages (3.x). point_id is the original detection index,
-        // which still indexes RScan->points[] (compaction happens later).
+        // Backfill SNR and noise into buffered RadarScan messages.
         for (auto &rs : radarscan_buffer) {
-          if (rs.point_id < mmwData.numObjOut)
+          if (rs.point_id < mmwData.numObjOut) {
             rs.intensity = RScan->points[rs.point_id].intensity;
+            rs.noise = RScan->points[rs.point_id].noise;
+          }
         }
       } else // else just skip side info section if we have not already received
              // and parsed detected obj list
