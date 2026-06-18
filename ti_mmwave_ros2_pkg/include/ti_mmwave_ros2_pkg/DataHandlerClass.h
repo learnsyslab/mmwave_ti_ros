@@ -21,7 +21,23 @@
 #include <cmath>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
+#include <pcl/register_point_struct.h>
 #include <pthread.h>
+
+struct PointXYZIV {
+  PCL_ADD_POINT4D;
+  float intensity;
+  float velocity;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIV,
+  (float, x, x)
+  (float, y, y)
+  (float, z, z)
+  (float, intensity, intensity)
+  (float, velocity, velocity)
+)
 #include <visualization_msgs/msg/marker.hpp>
 #define COUNT_SYNC_MAX 2
 

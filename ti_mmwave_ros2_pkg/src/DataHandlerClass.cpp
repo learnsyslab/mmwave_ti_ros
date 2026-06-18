@@ -41,6 +41,22 @@
 #include "ti_mmwave_ros2_pkg/DataHandlerClass.h"
 #include <stdio.h>
 
+// FIX: extra includes used by the fixes below.
+#include <algorithm> // std::clamp
+#include <atomic>    // std::atomic
+#include <chrono>    // std::chrono
+#include <vector>    // std::vector
+
+// FIX: guard so the sort thread does not process any frame using radar
+// parameters (nd, vvel, vrange, ...) before the *asynchronous* parameter
+// callback has populated them. start() launches the threads immediately, but
+// callbackGlobalParam() runs later, so without this the first frames can be
+// scaled with garbage values.
+// NOTE: ideally this would be a class member declared in DataHandlerClass.h;
+// it is kept file-static here only to avoid editing the header. If you run more
+// than one DataUARTHandler instance in a process, promote it to a member.
+static std::atomic<bool> g_radarParamsReady{false};
+
 DataUARTHandler::DataUARTHandler()
     : rclcpp::Node("DataUARTHandler"), currentBufp(&pingPongBuffers[0]),
       nextBufp(&pingPongBuffers[1]), threadsStarted(false) {
@@ -52,6 +68,9 @@ DataUARTHandler::DataUARTHandler()
   //   marker_pub = create_publisher<visualization_msgs::msg::Marker>(
   //       "/ti_mmwave/radar_scan_markers", 100);
   // onInit();
+  // NOTE: onInit() must be called externally AFTER setNamespace(), since it
+  // builds the parameter client from `ns`. If nothing calls it, the parameter
+  // client is never created and none of the radar parameters are loaded.
 }
 
 void DataUARTHandler::onInit() {
@@ -117,6 +136,9 @@ void DataUARTHandler::callbackGlobalParam(
       "m/s\n==============================\n",
       nr, nd, fs / 1e6, fc / 1e9, BW / 1e6, PRI * 1e6, tfr * 1e3, max_range,
       vrange, max_vel / 2, vvel);
+
+  // FIX: parameters are now populated; release the sort thread.
+  g_radarParamsReady.store(true);
 }
 
 void DataUARTHandler::setFrameID(const std::string &myFrameID) { frameID = myFrameID; }
@@ -194,6 +216,13 @@ void *DataUARTHandler::readIncomingData(void) {
     last8Bytes[5] = last8Bytes[6];
     last8Bytes[6] = last8Bytes[7];
     mySerialObject.read(&last8Bytes[7], 1);
+
+    // FIX: allow this pre-sync loop to exit on shutdown so the read thread can
+    // be joined cleanly if SIGINT arrives before the first magic word.
+    if (!rclcpp::ok()) {
+      mySerialObject.close();
+      pthread_exit(NULL);
+    }
   }
 
   /*Lock nextBufp before entering main loop*/
@@ -258,6 +287,10 @@ void *DataUARTHandler::readIncomingData(void) {
     }
   }
 
+  // FIX: release nextBufp_mutex held across the main loop before exiting,
+  // otherwise pthread_mutex_destroy() on it in the destructor is UB.
+  pthread_mutex_unlock(&nextBufp_mutex);
+
   mySerialObject.close();
 
   pthread_exit(NULL);
@@ -287,8 +320,18 @@ void *DataUARTHandler::syncedBufferSwap(void) {
 
     // Wait until both read and sort threads have checked in.
     // Re-check the condition after every wakeup to guard against spurious wakeups.
-    while (countSync < COUNT_SYNC_MAX) {
+    // FIX: also break on shutdown. Without the rclcpp::ok() test, the broadcast
+    // sent from the destructor wakes this thread, it finds countSync still
+    // below COUNT_SYNC_MAX (the read thread has stopped incrementing it), and
+    // goes back to waiting forever -> pthread_join(swapThread) hangs and the
+    // node never shuts down.
+    while (countSync < COUNT_SYNC_MAX && rclcpp::ok()) {
       pthread_cond_wait(&countSync_max_cv, &countSync_mutex);
+    }
+
+    if (!rclcpp::ok()) {
+      pthread_mutex_unlock(&countSync_mutex);
+      break;
     }
 
     // Both threads have checked in — safe to swap.
@@ -324,15 +367,28 @@ void *DataUARTHandler::sortIncomingData(void) {
   float maxElevationAngleRatioSquared;
   float maxAzimuthAngleRatio;
 
-  boost::shared_ptr<pcl::PointCloud<pcl::PointXYZI>> RScan(
-      new pcl::PointCloud<pcl::PointXYZI>);
+  boost::shared_ptr<pcl::PointCloud<PointXYZIV>> RScan(
+      new pcl::PointCloud<PointXYZIV>);
   sensor_msgs::msg::PointCloud2 output_pointcloud;
   ti_mmwave_ros2_interfaces::msg::RadarScan radarscan;
+
+  // FIX: buffer per-point RadarScan messages instead of publishing them mid-parse.
+  // In SDK 3.x the SNR (intensity) lives in the side-info TLV, which is parsed
+  // AFTER the detected-points TLV. Publishing inside READ_OBJ_STRUCT therefore
+  // emitted stale/uninitialised SNR. We collect the messages here, backfill the
+  // intensity in READ_SIDE_INFO, and publish once per frame in CHECK_TLV_TYPE.
+  std::vector<ti_mmwave_ros2_interfaces::msg::RadarScan> radarscan_buffer;
 
   // wait for first packet to arrive
   pthread_mutex_lock(&countSync_mutex);
   pthread_cond_wait(&sort_go_cv, &countSync_mutex);
   pthread_mutex_unlock(&countSync_mutex);
+
+  // FIX: do not start interpreting frames until the radar parameters have been
+  // loaded by the async parameter callback (nd, vvel, vrange, ... are used below).
+  while (rclcpp::ok() && !g_radarParamsReady.load()) {
+    rclcpp::sleep_for(std::chrono::milliseconds(10));
+  }
 
   pthread_mutex_lock(&currentBufp_mutex);
 
@@ -340,12 +396,20 @@ void *DataUARTHandler::sortIncomingData(void) {
 
     // std::cout << "sortIncomingData" << std::endl;
 
+    // FIX: a malformed / truncated packet makes the std::vector::at() calls
+    // below throw std::out_of_range. An uncaught exception in a pthread calls
+    // std::terminate and brings down the whole node. Catch it, discard the
+    // frame, and resync. currentBufp_mutex is held throughout this switch
+    // (except during SWAP_BUFFERS' wait), so SWAP_BUFFERS can safely unlock it.
+    try {
+
     switch (sorterState) {
 
     case READ_HEADER:
 
       // init variables
       mmwData.numObjOut = 0;
+      radarscan_buffer.clear(); // FIX: fresh RadarScan buffer for this frame
 
       // make sure packet has at least first three fields (12 bytes) before we
       // read them (does not include magicWord since it was already removed)
@@ -538,6 +602,7 @@ void *DataUARTHandler::sortIncomingData(void) {
               temp[2]; // ROS standard coordinate system Z-axis is up which is
                        // the same as mmWave sensor Z-axis
           RScan->points[i].intensity = temp[5];
+          RScan->points[i].velocity = temp[7];
 
           radarscan.header.frame_id = frameID;
           radarscan.header.stamp = rclcpp::Clock().now();
@@ -582,6 +647,7 @@ void *DataUARTHandler::sortIncomingData(void) {
           RScan->points[i].z =
               mmwData.newObjOut.z; // ROS standard coordinate system Z-axis is up which is
                       // the same as mmWave sensor Z-axis
+          RScan->points[i].velocity = mmwData.newObjOut.velocity;
 
           radarscan.header.frame_id = frameID;
           radarscan.header.stamp = rclcpp::Clock().now();
@@ -592,9 +658,18 @@ void *DataUARTHandler::sortIncomingData(void) {
           radarscan.z = mmwData.newObjOut.z;
           // radarscan.range = temp[4];
           radarscan.velocity = mmwData.newObjOut.velocity;
-          radarscan.doppler_bin = static_cast<uint16_t>(mmwData.objOut.rangeIdx + nd / 2);
+
+          // FIX: the 3.x detected-points TLV carries no doppler/range index,
+          // and mmwData.objOut is the legacy (<3.x) struct that is never
+          // populated on this path — reading objOut.rangeIdx here was stale
+          // garbage. Leave doppler_bin unset (0).
+          radarscan.doppler_bin = 0;
           // radarscan.bearing = temp[6];
-          radarscan.intensity = static_cast<float>(mmwData.sideInfo.snr);
+
+          // FIX: snr is not available yet (the side-info TLV is parsed later).
+          // Set a provisional 0; it is backfilled in READ_SIDE_INFO before the
+          // message is published in CHECK_TLV_TYPE.
+          radarscan.intensity = 0.0f;
 
           // For SDK 3.x, intensity is replaced by snr in sideInfo and is parsed
           // in the READ_SIDE_INFO code
@@ -609,7 +684,9 @@ void *DataUARTHandler::sortIncomingData(void) {
              (fabs(RScan->points[i].y / RScan->points[i].x) <
               maxAzimuthAngleRatio)) &&
             (RScan->points[i].x != 0)) {
-          radar_scan_pub->publish(radarscan);
+          // FIX: defer publish — buffer this message (point_id maps it back to
+          // RScan->points[] for the SNR backfill in READ_SIDE_INFO).
+          radarscan_buffer.push_back(radarscan);
         }
         i++;
       }
@@ -639,16 +716,19 @@ void *DataUARTHandler::sortIncomingData(void) {
               10.0; // Use snr for "intensity" field (divide by 10 since unit of
                     // snr is 0.1dB)
         }
+
+        // FIX: backfill the now-known SNR-based intensity into the buffered
+        // RadarScan messages (3.x). point_id is the original detection index,
+        // which still indexes RScan->points[] (compaction happens later).
+        for (auto &rs : radarscan_buffer) {
+          if (rs.point_id < mmwData.numObjOut)
+            rs.intensity = RScan->points[rs.point_id].intensity;
+        }
       } else // else just skip side info section if we have not already received
              // and parsed detected obj list
       {
-        i = 0;
-
-        while (i++ < tlvLen - 1) {
-          // ROS_INFO("DataUARTHandler Sort Thread : Parsing Side Info i=%d and
-          // tlvLen = %u", i, tlvLen);
-        }
-
+        // FIX: removed the empty no-op spin loop (which also underflowed when
+        // tlvLen == 0 since tlvLen is unsigned). Just skip the section.
         currentDatap += tlvLen;
       }
 
@@ -662,58 +742,26 @@ void *DataUARTHandler::sortIncomingData(void) {
       break;
 
     case READ_NOISE:
-
-      i = 0;
-
-      while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Noise Profile i=%d
-        // and tlvLen = %u", i, tlvLen);
-      }
-
+      // FIX: removed empty no-op spin loop.
       currentDatap += tlvLen;
-
       sorterState = CHECK_TLV_TYPE;
       break;
 
     case READ_AZIMUTH:
-
-      i = 0;
-
-      while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Azimuth Profile i=%d
-        // and tlvLen = %u", i, tlvLen);
-      }
-
+      // FIX: removed empty no-op spin loop.
       currentDatap += tlvLen;
-
       sorterState = CHECK_TLV_TYPE;
       break;
 
     case READ_DOPPLER:
-
-      i = 0;
-
-      while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Doppler Profile i=%d
-        // and tlvLen = %u", i, tlvLen);
-      }
-
+      // FIX: removed empty no-op spin loop.
       currentDatap += tlvLen;
-
       sorterState = CHECK_TLV_TYPE;
       break;
 
     case READ_STATS:
-
-      i = 0;
-
-      while (i++ < tlvLen - 1) {
-        // ROS_INFO("DataUARTHandler Sort Thread : Parsing Stats Profile i=%d
-        // and tlvLen = %u", i, tlvLen);
-      }
-
+      // FIX: removed empty no-op spin loop.
       currentDatap += tlvLen;
-
       sorterState = CHECK_TLV_TYPE;
       break;
 
@@ -725,6 +773,13 @@ void *DataUARTHandler::sortIncomingData(void) {
       if (tlvCount++ >=
           mmwData.header.numTLVs) // Done parsing all received TLV sections
       {
+        // FIX: publish the per-point RadarScan messages now that intensity/SNR
+        // is final (empty buffer -> no-op).
+        for (const auto &rs : radarscan_buffer) {
+          radar_scan_pub->publish(rs);
+        }
+        radarscan_buffer.clear();
+
         // Publish detected object pointcloud
         if (mmwData.numObjOut > 0) {
           j = 0;
@@ -870,7 +925,19 @@ void *DataUARTHandler::sortIncomingData(void) {
     default:
       break;
     }
+
+    } catch (const std::out_of_range &e) {
+      // FIX: malformed / truncated packet — discard and resync. currentBufp_mutex
+      // is still held here, and SWAP_BUFFERS releases it as usual.
+      printf("DataUARTHandler Sort Thread: truncated packet, resyncing (%s)\n",
+             e.what());
+      sorterState = SWAP_BUFFERS;
+    }
   }
+
+  // FIX: release currentBufp_mutex held across the main loop before exiting,
+  // otherwise pthread_mutex_destroy() on it in the destructor is UB.
+  pthread_mutex_unlock(&currentBufp_mutex);
 
   pthread_exit(NULL);
 }
@@ -953,6 +1020,9 @@ void *DataUARTHandler::syncedBufferSwap_helper(void *context) {
 
 void DataUARTHandler::visualize(
     const ti_mmwave_ros2_interfaces::msg::RadarScan &msg) {
+  // NOTE: this method is never called anywhere in this file, so no markers are
+  // ever published even though marker_pub is set up. Wire it up (e.g. call it
+  // per point in the publish path) if you actually want the markers.
   // visualization_msgs::msg::Marker marker;
   auto marker = visualization_msgs::msg::Marker();
 
@@ -976,9 +1046,14 @@ void DataUARTHandler::visualize(
   marker.scale.y = .03;
   marker.scale.z = .03;
 
+  // FIX: ROS marker colors (std_msgs/ColorRGBA) are floats in [0, 1], not
+  // 0..255. The old code multiplied by 255 (and `(int)255` cast the literal,
+  // not the product), so any non-trivial intensity saturated to white. Clamp
+  // the normalized intensity into range instead.
+  float c = std::clamp(msg.intensity, 0.0f, 1.0f);
   marker.color.a = 1;
-  marker.color.r = (int)255 * msg.intensity;
-  marker.color.g = (int)255 * msg.intensity;
+  marker.color.r = c;
+  marker.color.g = c;
   marker.color.b = 1;
 
   marker_pub->publish(marker);
