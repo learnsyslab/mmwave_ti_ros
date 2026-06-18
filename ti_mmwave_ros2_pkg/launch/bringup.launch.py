@@ -15,8 +15,11 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
 
-    cfg_file = "6843AOP_saberguide_odom.cfg"
-    #cfg_file = "6843AOP_Doer.cfg"
+    cfg_file = "iwr1843boost_outdoor_hires_10m.cfg"  #"iwr1843boost_outdoor_survey_hover.cfg"
+    cfg_file = "iwr1843boost_outdoor_survey_hover.cfg"
+    #cfg_file = "iwr1843boost_outdoor_survey_25m_576k.cfg"
+    #cfg_file = "iwr1843boost_config4_max_fov_no_clutter.cfg"
+    #cfg_file = "iwr1843boost_outdoor_survey_25m_final.cfg"
 
     pkg_dir_path = get_package_share_directory('ti_mmwave_ros2_pkg')
     cfg_file_path = os.path.join(pkg_dir_path, 'cfg', cfg_file)
@@ -39,7 +42,7 @@ def generate_launch_description():
         name='mmWaveCommSrvNode',
         output='screen',
         parameters=[{
-            "command_port": "/dev/ttyUSB0",
+            "command_port": "/dev/iwr1843_cfg",
             "command_rate": 115200,
             "mmWaveCLI_name": "/mmWaveCLI",
         }],
@@ -65,7 +68,7 @@ def generate_launch_description():
                     plugin='ti_mmwave_ros2_pkg::mmWaveDataHdl',
                     name='mmWaveDataHdl',
                     parameters=[{
-                        "data_port": "/dev/ttyUSB1",
+                        "data_port": "/dev/iwr1843_data",
                         "data_rate": 921600,
                         "frame_id": "ti_mmwave_0",
                         "max_allowed_elevation_angle_deg": 90,
@@ -84,9 +87,5 @@ def generate_launch_description():
                 target_action=mmwave_quick_config,
                 on_exit=[container],
             )
-        ),
-        TimerAction(    
-            period=3.0,
-            actions=[rviz2]
         ),
     ])
