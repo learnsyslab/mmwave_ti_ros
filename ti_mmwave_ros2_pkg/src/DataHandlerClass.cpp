@@ -773,14 +773,7 @@ void *DataUARTHandler::sortIncomingData(void) {
       if (tlvCount++ >=
           mmwData.header.numTLVs) // Done parsing all received TLV sections
       {
-        // FIX: publish the per-point RadarScan messages now that intensity/SNR
-        // is final (empty buffer -> no-op).
-        for (const auto &rs : radarscan_buffer) {
-          radar_scan_pub->publish(rs);
-        }
-        radarscan_buffer.clear();
-
-        // Publish detected object pointcloud
+        // Compact RScan first so point_id can be aligned to the final index.
         if (mmwData.numObjOut > 0) {
           j = 0;
           for (i = 0; i < mmwData.numObjOut; i++) {
@@ -797,23 +790,25 @@ void *DataUARTHandler::sortIncomingData(void) {
                  (fabs(RScan->points[i].y / RScan->points[i].x) <
                   maxAzimuthAngleRatio)) &&
                 (RScan->points[i].x != 0)) {
-              // ROS_INFO("Kept point");
-              // copy: points[i] => points[j]
               memcpy(&RScan->points[j], &RScan->points[i],
                      sizeof(RScan->points[i]));
               j++;
             }
           }
-          mmwData.numObjOut = j; // update number of objects as some points may
-                                 // have been removed
-
-          // Resize point cloud since some points may have been removed
+          mmwData.numObjOut = j;
           RScan->width = mmwData.numObjOut;
           RScan->points.resize(RScan->width * RScan->height);
+        }
 
-          // ROS_INFO("mmwData.numObjOut after = %d", mmwData.numObjOut);
-          // ROS_INFO("DataUARTHandler Sort Thread: number of obj = %d",
-          // mmwData.numObjOut );
+        // Update point_id to match the compacted PointCloud2 index, then publish.
+        for (uint16_t k = 0; k < static_cast<uint16_t>(radarscan_buffer.size()); k++) {
+          radarscan_buffer[k].point_id = k;
+          radar_scan_pub->publish(radarscan_buffer[k]);
+        }
+        radarscan_buffer.clear();
+
+        // Publish PointCloud2
+        if (mmwData.numObjOut > 0) {
           pcl::PCLPointCloud2 cloud_ROI;
           pcl::toPCLPointCloud2(*RScan, cloud_ROI);
           pcl_conversions::fromPCL(cloud_ROI, output_pointcloud);
