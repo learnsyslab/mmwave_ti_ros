@@ -366,6 +366,7 @@ void *DataUARTHandler::sortIncomingData(void) {
   int j = 0;
   float maxElevationAngleRatioSquared;
   float maxAzimuthAngleRatio;
+  rclcpp::Time frameStamp;
 
   boost::shared_ptr<pcl::PointCloud<PointXYZVIN>> RScan(
       new pcl::PointCloud<PointXYZVIN>);
@@ -507,9 +508,16 @@ void *DataUARTHandler::sortIncomingData(void) {
         mmwData.numObjOut = mmwData.header.numDetectedObj;
       }
 
-      // RScan->header.seq = 0;
-      // RScan->header.stamp = rclcpp::Clock().now();
-      // RScan->header.stamp = (uint32_t) mmwData.header.timeCpuCycles;
+      // Stamp the whole frame once here (all points below share one instant,
+      // since they all come from the same TLV / chirp burst) and reuse it for
+      // both RScan (-> PointCloud2) and the per-point RadarScan messages, so
+      // messages published for this frame carry identical timestamps.
+      //
+      // RScan->header uses a pcl::PCLHeader, whose stamp is in microseconds
+      // (not the rclcpp::Time used by the ROS message header). Convert so
+      // pcl_conversions::fromPCL() below fills in a valid, non-zero stamp.
+      frameStamp = rclcpp::Clock().now();
+      RScan->header.stamp = pcl_conversions::toPCL(frameStamp);
       RScan->header.frame_id = frameID;
       RScan->height = 1;
       RScan->width = mmwData.numObjOut;
@@ -606,7 +614,7 @@ void *DataUARTHandler::sortIncomingData(void) {
           RScan->points[i].noise = 0.0f; // not available in SDK 2.x
 
           radarscan.header.frame_id = frameID;
-          radarscan.header.stamp = rclcpp::Clock().now();
+          radarscan.header.stamp = frameStamp;
 
           radarscan.point_id = i;
           radarscan.x = temp[1];
@@ -652,7 +660,7 @@ void *DataUARTHandler::sortIncomingData(void) {
           RScan->points[i].noise = 0.0f; // backfilled in READ_SIDE_INFO
 
           radarscan.header.frame_id = frameID;
-          radarscan.header.stamp = rclcpp::Clock().now();
+          radarscan.header.stamp = frameStamp;
 
           radarscan.point_id = i;
           radarscan.x = mmwData.newObjOut.y;
