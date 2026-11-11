@@ -208,6 +208,19 @@ void *DataUARTHandler::readIncomingData(void) {
   /*Quick magicWord check to synchronize program with data Stream*/
   while (!isMagicWord(last8Bytes)) {
 
+    // FIX: allow this pre-sync loop to exit on shutdown so the read thread can
+    // be joined cleanly if SIGINT arrives before the first magic word.
+    if (!rclcpp::ok()) {
+      mySerialObject.close();
+      pthread_exit(NULL);
+    }
+
+    // FIX: read() returns 0 when the 100 ms serial timeout expires. Only
+    // consume a byte when one was actually received (see main loop below).
+    uint8_t rxByte;
+    if (mySerialObject.read(&rxByte, 1) != 1)
+      continue;
+
     last8Bytes[0] = last8Bytes[1];
     last8Bytes[1] = last8Bytes[2];
     last8Bytes[2] = last8Bytes[3];
@@ -215,14 +228,7 @@ void *DataUARTHandler::readIncomingData(void) {
     last8Bytes[4] = last8Bytes[5];
     last8Bytes[5] = last8Bytes[6];
     last8Bytes[6] = last8Bytes[7];
-    mySerialObject.read(&last8Bytes[7], 1);
-
-    // FIX: allow this pre-sync loop to exit on shutdown so the read thread can
-    // be joined cleanly if SIGINT arrives before the first magic word.
-    if (!rclcpp::ok()) {
-      mySerialObject.close();
-      pthread_exit(NULL);
-    }
+    last8Bytes[7] = rxByte;
   }
 
   /*Lock nextBufp before entering main loop*/
@@ -234,6 +240,16 @@ void *DataUARTHandler::readIncomingData(void) {
 
     /*Start reading UART data and writing to buffer while also checking for
      * magicWord*/
+    // FIX: read() returns 0 when the serial timeout (100 ms) expires with no
+    // data. The return value used to be ignored, so every timeout pushed a
+    // stale byte into the packet; the packet then failed the totalPacketLen
+    // check and the whole frame was dropped. With a 100 ms frame period the
+    // idle gap between packets is about the same as the timeout, so this hit
+    // most frames (10 Hz configs published at ~3.3 Hz). Skip empty reads.
+    uint8_t rxByte;
+    if (mySerialObject.read(&rxByte, 1) != 1)
+      continue;
+
     last8Bytes[0] = last8Bytes[1];
     last8Bytes[1] = last8Bytes[2];
     last8Bytes[2] = last8Bytes[3];
@@ -241,7 +257,7 @@ void *DataUARTHandler::readIncomingData(void) {
     last8Bytes[4] = last8Bytes[5];
     last8Bytes[5] = last8Bytes[6];
     last8Bytes[6] = last8Bytes[7];
-    mySerialObject.read(&last8Bytes[7], 1);
+    last8Bytes[7] = rxByte;
 
     nextBufp->push_back(last8Bytes[7]); // push byte onto buffer
 
